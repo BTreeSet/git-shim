@@ -3,3 +3,4 @@
 //! home that does not bleed into the rest of the crate.
 
 pub mod exec;
+pub mod localappdata;

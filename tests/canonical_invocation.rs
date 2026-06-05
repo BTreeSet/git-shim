@@ -1,6 +1,8 @@
 //! Integration test: verifies the canonical `git-shim` binary errors clearly
-//! when GitHub Desktop cannot be located, by scrubbing `%LOCALAPPDATA%` so
-//! the resolver hits a deterministic failure path.
+//! when GitHub Desktop cannot be located. We point `%LOCALAPPDATA%` at a
+//! guaranteed-empty temp directory, forcing the resolver to hit the
+//! `LauncherMissing` failure path even on a runner where GitHub Desktop
+//! happens to be installed.
 //!
 //! This exercises the full `main()` pipeline without requiring an actual
 //! GitHub Desktop install on the test runner.
@@ -31,14 +33,19 @@ fn shim_exits_nonzero_when_resolution_fails() {
     }
     assert!(bin.exists(), "expected built binary at {}", bin.display());
 
-    // Scrub `%LOCALAPPDATA%` so the resolver fails deterministically with
-    // `LocalAppDataMissing` even if GitHub Desktop happens to be installed
-    // on the runner.
+    // Empty temp dir → no `GitHubDesktop\bin\github` underneath → resolver
+    // fails deterministically with `LauncherMissing`. Done this way rather
+    // than scrubbing the variable so that the Known Folders fallback in
+    // `os::localappdata` cannot accidentally "rescue" the test on a runner
+    // where GitHub Desktop is actually installed.
+    let scratch = tempfile::tempdir().expect("create temp dir");
+
     let out = Command::new(&bin)
-        .env_remove("LOCALAPPDATA")
+        .env("LOCALAPPDATA", scratch.path())
         .output()
         .expect("spawn git-shim");
     let stderr = String::from_utf8_lossy(&out.stderr);
+
     assert!(
         !out.status.success(),
         "expected non-zero exit, got success with stderr: {stderr}"
@@ -48,7 +55,7 @@ fn shim_exits_nonzero_when_resolution_fails() {
         "expected `git-shim:` diagnostic on stderr, got: {stderr}"
     );
     assert!(
-        stderr.contains("LOCALAPPDATA"),
-        "expected LOCALAPPDATA mention on stderr, got: {stderr}"
+        stderr.contains("launcher script not found"),
+        "expected `launcher script not found` on stderr, got: {stderr}"
     );
 }

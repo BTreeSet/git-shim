@@ -24,6 +24,12 @@ Correctness, exit-code fidelity, and Windows behavior are non-negotiable.
    hard-code a user profile path (e.g. `C:\Users\<name>\...`), never embed
    a username in source/tests/docs/CI/scripts, and never call `whoami`
    or read the `USERNAME` env var to construct paths.
+
+   Resolution goes through [`os::localappdata::resolve`](src/os/localappdata.rs):
+   read the `LOCALAPPDATA` env var first; on a stripped environment fall
+   back to `SHGetKnownFolderPath(FOLDERID_LocalAppData)`. **Never** treat
+   the string `"%LOCALAPPDATA%"` as a literal path — `%VAR%` is `cmd.exe`
+   syntax and is not expanded by `std::path::Path` or any Win32 file API.
 3. **Version resolution.** The active `app-<version>` directory is parsed
    from the GitHub Desktop launcher script at
    `%LOCALAPPDATA%\GitHubDesktop\bin\github`. Never glob `app-*` and

@@ -29,6 +29,14 @@ environment variable, which Windows sets per user. It never reads, embeds,
 or assumes a specific username — so the same compiled binary works for any
 user on any machine.
 
+> Note: `%LOCALAPPDATA%` here is shorthand for the *value* of the
+> `LOCALAPPDATA` environment variable. The shim reads it with
+> `std::env::var_os("LOCALAPPDATA")` and, on stripped-environment edge cases
+> (some services, sandboxed launchers), falls back to the canonical Win32
+> `SHGetKnownFolderPath(FOLDERID_LocalAppData)` API. It does **not** treat
+> the literal string `"%LOCALAPPDATA%"` as a path — that syntax is only
+> expanded by `cmd.exe`, not by Rust's `Path` or any Win32 file API.
+
 1. Read `%LOCALAPPDATA%\GitHubDesktop\bin\github` (a POSIX shell script
    GitHub Desktop maintains).
 2. Extract the embedded `app-<version>` token via standard-library string

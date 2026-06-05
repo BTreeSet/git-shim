@@ -27,6 +27,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::ShimError;
+use crate::os::localappdata;
 
 /// Token that always precedes the `app-<version>` segment in the launcher
 /// script body, regardless of how the user's `%LOCALAPPDATA%` is spelled.
@@ -35,9 +36,11 @@ const LAUNCHER_NEEDLE: &str = "/resources/app/static/github.sh";
 /// Resolve the active `git.exe` path for the current user's GitHub Desktop
 /// install. The returned path is canonicalized and verified to exist.
 pub fn resolve_git() -> Result<PathBuf, ShimError> {
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .filter(|v| !v.is_empty())
-        .ok_or(ShimError::LocalAppDataMissing)?;
+    // `localappdata::resolve` reads the `LOCALAPPDATA` env var first and
+    // falls back to the Win32 Known Folders API. We never treat
+    // `"%LOCALAPPDATA%"` as a literal path — that's `cmd.exe` syntax, not a
+    // Rust/Win32 path concept.
+    let local_app_data = localappdata::resolve()?;
 
     let install_root = PathBuf::from(&local_app_data).join("GitHubDesktop");
     let launcher = install_root.join("bin").join("github");
