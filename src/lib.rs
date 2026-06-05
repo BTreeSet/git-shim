@@ -1,6 +1,21 @@
 //! Library entry for `git-shim`. The single binary target (`git-shim`)
 //! delegates to [`entry`], which resolves the active GitHub Desktop `git.exe`
-//! and replaces / forwards to it.
+//! and forwards to it.
+//!
+//! ## Platform scope
+//!
+//! `git-shim` only makes sense on Windows: GitHub Desktop ships a Git for
+//! Windows distribution inside `%LOCALAPPDATA%\GitHubDesktop\app-<version>\`
+//! that has no analogue on macOS or Linux. The crate therefore refuses to
+//! compile on any other target.
+
+#[cfg(not(windows))]
+compile_error!(
+    "git-shim only supports Windows. GitHub Desktop's bundled git.exe lives \
+     under %LOCALAPPDATA%\\GitHubDesktop\\app-<version>\\..., a layout that \
+     does not exist on macOS or Linux. Build with --target \
+     x86_64-pc-windows-msvc or aarch64-pc-windows-msvc."
+);
 
 pub mod error;
 pub mod os;
@@ -26,9 +41,9 @@ pub fn entry() -> ExitCode {
 }
 
 fn run() -> Result<i32, ShimError> {
-    // Sanity check argv[0] exists; we do not currently dispatch on it (single-
-    // mode shim) but a missing argv[0] indicates a broken host environment we
-    // would rather surface than silently paper over.
+    // Sanity check argv[0] exists. We do not currently dispatch on it
+    // (single-mode shim) but a missing argv[0] indicates a broken host
+    // environment we would rather surface than silently paper over.
     let _argv0 = std::env::args_os().next().ok_or(ShimError::MissingArgv0)?;
 
     let git = resolver::resolve_git()?;
@@ -38,10 +53,11 @@ fn run() -> Result<i32, ShimError> {
 
 /// Clamp a signed exit code to the unsigned byte that `ExitCode` accepts.
 ///
-/// - Negative values (Unix signal-style returns) collapse to `128`, matching
-///   the POSIX `128 + signo` convention without requiring us to recover the
-///   signal number.
-/// - Otherwise, take the low 8 bits, mirroring what `wait(2)` exposes.
+/// - Negative values collapse to `128`. They cannot originate from a normal
+///   Windows child exit, but we defend in depth in case a future code path
+///   ever returns one.
+/// - Otherwise, take the low 8 bits, mirroring POSIX `wait(2)` semantics
+///   that callers of CLI tools commonly assume.
 #[inline]
 pub fn clamp_exit(code: i32) -> u8 {
     if code < 0 { 128 } else { (code & 0xFF) as u8 }

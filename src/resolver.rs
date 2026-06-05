@@ -1,7 +1,7 @@
-//! Resolve the absolute path to the `git.exe` shipped inside the user's
-//! GitHub Desktop installation.
+//! Resolve the absolute path to the `git.exe` shipped inside the current
+//! user's GitHub Desktop installation.
 //!
-//! ## Layout assumptions (Windows)
+//! ## Layout assumptions
 //!
 //! GitHub Desktop on Windows installs per-user under `%LOCALAPPDATA%`:
 //!
@@ -15,7 +15,8 @@
 //!
 //! The launcher script embeds the current `app-<version>` directory in its
 //! body. Parsing that token lets us locate the active install without
-//! hard-coding a version that changes on every GitHub Desktop update.
+//! hard-coding a version that changes on every GitHub Desktop update — and
+//! without ever referring to a specific user profile name.
 //!
 //! ## Why parse the launcher and not glob `app-*`?
 //!
@@ -34,7 +35,32 @@ const LAUNCHER_NEEDLE: &str = "/resources/app/static/github.sh";
 /// Resolve the active `git.exe` path for the current user's GitHub Desktop
 /// install. The returned path is canonicalized and verified to exist.
 pub fn resolve_git() -> Result<PathBuf, ShimError> {
-    imp::resolve_git()
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .filter(|v| !v.is_empty())
+        .ok_or(ShimError::LocalAppDataMissing)?;
+
+    let install_root = PathBuf::from(&local_app_data).join("GitHubDesktop");
+    let launcher = install_root.join("bin").join("github");
+
+    if !launcher.is_file() {
+        return Err(ShimError::LauncherMissing(launcher));
+    }
+
+    let contents = std::fs::read_to_string(&launcher)
+        .map_err(|e| ShimError::LauncherRead(launcher.clone(), e))?;
+
+    let app_version = parse_app_version(&contents)
+        .ok_or_else(|| ShimError::VersionTokenMissing(launcher.clone()))?;
+
+    let candidate = git_path_for(&install_root, app_version);
+    let canonical = candidate
+        .canonicalize()
+        .map_err(|e| ShimError::CanonicalizeFailed(candidate.clone(), e))?;
+
+    if !canonical.is_file() {
+        return Err(ShimError::GitExecutableMissing(canonical));
+    }
+    Ok(canonical)
 }
 
 /// Pure helper: given the textual contents of the GitHub Desktop launcher
@@ -73,61 +99,15 @@ pub fn git_path_for(install_root: &Path, app_version: &str) -> PathBuf {
         .join("git.exe")
 }
 
-#[cfg(target_os = "windows")]
-mod imp {
-    use super::{git_path_for, parse_app_version};
-    use crate::error::ShimError;
-    use std::path::PathBuf;
-
-    pub fn resolve_git() -> Result<PathBuf, ShimError> {
-        let local_app_data = std::env::var_os("LOCALAPPDATA")
-            .filter(|v| !v.is_empty())
-            .ok_or(ShimError::LocalAppDataMissing)?;
-
-        let install_root = PathBuf::from(&local_app_data).join("GitHubDesktop");
-        let launcher = install_root.join("bin").join("github");
-
-        if !launcher.is_file() {
-            return Err(ShimError::LauncherMissing(launcher));
-        }
-
-        let contents = std::fs::read_to_string(&launcher)
-            .map_err(|e| ShimError::LauncherRead(launcher.clone(), e))?;
-
-        let app_version = parse_app_version(&contents)
-            .ok_or_else(|| ShimError::VersionTokenMissing(launcher.clone()))?;
-
-        let candidate = git_path_for(&install_root, app_version);
-        let canonical = candidate
-            .canonicalize()
-            .map_err(|e| ShimError::CanonicalizeFailed(candidate.clone(), e))?;
-
-        if !canonical.is_file() {
-            return Err(ShimError::GitExecutableMissing(canonical));
-        }
-        Ok(canonical)
-    }
-}
-
-#[cfg(not(target_os = "windows"))]
-mod imp {
-    use crate::error::ShimError;
-    use std::path::PathBuf;
-
-    pub fn resolve_git() -> Result<PathBuf, ShimError> {
-        // GitHub Desktop on macOS ships inside an .app bundle with a totally
-        // different on-disk layout, and there is no GitHub Desktop for Linux.
-        // Rather than silently call system `git`, we surface a typed error.
-        Err(ShimError::UnsupportedPlatform(std::env::consts::OS))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_typical_launcher_body() {
+        // The path inside the launcher embeds whatever user profile the
+        // installer ran under. We deliberately use a generic name in tests
+        // to assert that the parser is username-agnostic.
         let body = r#"#!/bin/sh
 exec "/c/Users/example/AppData/Local/GitHubDesktop/app-3.4.5/resources/app/static/github.sh" "$@"
 "#;
@@ -139,6 +119,16 @@ exec "/c/Users/example/AppData/Local/GitHubDesktop/app-3.4.5/resources/app/stati
         let body =
             "anything /Users/x/Local/GitHubDesktop/app-3.5.0-beta1/resources/app/static/github.sh";
         assert_eq!(parse_app_version(body), Some("app-3.5.0-beta1"));
+    }
+
+    #[test]
+    fn parser_is_username_agnostic() {
+        for user in ["alice", "bob.smith", "carol-dev", "ARK Builder"] {
+            let body = format!(
+                "exec \"/c/Users/{user}/AppData/Local/GitHubDesktop/app-9.9.9/resources/app/static/github.sh\""
+            );
+            assert_eq!(parse_app_version(&body), Some("app-9.9.9"), "user={user}");
+        }
     }
 
     #[test]
@@ -174,10 +164,10 @@ exec "/c/Users/example/AppData/Local/GitHubDesktop/app-3.4.5/resources/app/stati
 
     #[test]
     fn git_path_for_assembles_expected_layout() {
-        let root = std::path::Path::new("/install");
+        let root = std::path::Path::new("C:/install");
         let p = git_path_for(root, "app-3.4.5");
         let expected: std::path::PathBuf = [
-            "/install",
+            "C:/install",
             "app-3.4.5",
             "resources",
             "app",

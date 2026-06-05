@@ -1,6 +1,5 @@
-//! OS-segregated implementation details.
-//!
-//! All platform-specific behavior lives behind `#[cfg(...)]` here. The rest
-//! of the crate must never branch on `cfg!()` at runtime for OS dispatch.
+//! Windows-only implementation details. Kept as a sub-module so future
+//! additions (registry probing, NT path manipulation, etc.) have an obvious
+//! home that does not bleed into the rest of the crate.
 
 pub mod exec;

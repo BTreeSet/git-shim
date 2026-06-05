@@ -1,9 +1,9 @@
 //! Integration test: verifies the canonical `git-shim` binary errors clearly
-//! on platforms where GitHub Desktop has no supported install layout (Linux,
-//! macOS), or when the install simply isn't present.
+//! when GitHub Desktop cannot be located, by scrubbing `%LOCALAPPDATA%` so
+//! the resolver hits a deterministic failure path.
 //!
-//! This exercises the full `main()` pipeline without requiring GitHub
-//! Desktop or `git.exe` to be installed on the test runner.
+//! This exercises the full `main()` pipeline without requiring an actual
+//! GitHub Desktop install on the test runner.
 
 use std::process::Command;
 
@@ -15,11 +15,7 @@ fn shim_path() -> std::path::PathBuf {
     } else {
         "release"
     });
-    p.push(if cfg!(windows) {
-        "git-shim.exe"
-    } else {
-        "git-shim"
-    });
+    p.push("git-shim.exe");
     p
 }
 
@@ -35,16 +31,13 @@ fn shim_exits_nonzero_when_resolution_fails() {
     }
     assert!(bin.exists(), "expected built binary at {}", bin.display());
 
-    // On Unix the resolver returns `UnsupportedPlatform`. On Windows without
-    // GitHub Desktop installed it returns `LauncherMissing` (or, in the
-    // unlikely event of an unset `%LOCALAPPDATA%`, `LocalAppDataMissing`).
-    // In every case we expect a non-zero exit and a `git-shim:` diagnostic.
-    let mut cmd = Command::new(&bin);
-    // Scrub `LOCALAPPDATA` so Windows runners exercise a deterministic
-    // failure path even if some unrelated directory happens to exist.
-    cmd.env_remove("LOCALAPPDATA");
-
-    let out = cmd.output().expect("spawn git-shim");
+    // Scrub `%LOCALAPPDATA%` so the resolver fails deterministically with
+    // `LocalAppDataMissing` even if GitHub Desktop happens to be installed
+    // on the runner.
+    let out = Command::new(&bin)
+        .env_remove("LOCALAPPDATA")
+        .output()
+        .expect("spawn git-shim");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !out.status.success(),
@@ -53,5 +46,9 @@ fn shim_exits_nonzero_when_resolution_fails() {
     assert!(
         stderr.contains("git-shim:"),
         "expected `git-shim:` diagnostic on stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("LOCALAPPDATA"),
+        "expected LOCALAPPDATA mention on stderr, got: {stderr}"
     );
 }

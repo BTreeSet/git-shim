@@ -13,12 +13,12 @@ pub enum ShimError {
     /// The host OS did not provide `argv[0]`. Should be unreachable on any
     /// supported platform, but we model it rather than panic.
     MissingArgv0,
-    /// The platform does not have a known GitHub Desktop install layout.
-    UnsupportedPlatform(&'static str),
     /// `%LOCALAPPDATA%` is unset or empty; cannot derive the install root.
+    /// In practice this only happens when the variable has been explicitly
+    /// scrubbed (e.g. by a misconfigured service or a test harness).
     LocalAppDataMissing,
     /// The GitHub Desktop launcher script could not be found at the expected
-    /// path. Usually means GitHub Desktop is not installed.
+    /// path. Usually means GitHub Desktop is not installed for this user.
     LauncherMissing(PathBuf),
     /// Failed to read the launcher script.
     LauncherRead(PathBuf, io::Error),
@@ -36,10 +36,6 @@ impl fmt::Display for ShimError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ShimError::MissingArgv0 => write!(f, "argv[0] was not provided by the OS"),
-            ShimError::UnsupportedPlatform(os) => write!(
-                f,
-                "git-shim has no GitHub Desktop resolver for this platform ({os})"
-            ),
             ShimError::LocalAppDataMissing => write!(
                 f,
                 "%LOCALAPPDATA% is not set; cannot locate GitHub Desktop install root"
