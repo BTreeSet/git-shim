@@ -63,8 +63,13 @@ fn run() -> Result<i32, ShimError> {
     // Debug knob (see crate-level docs): print the resolved git.exe and
     // exit before spawning. Used by the e2e CI job to verify the resolver
     // points at GitHub Desktop's bundled git, not the runner's system git.
+    //
+    // We strip the Win32 `\\?\` extended-length prefix here (a display
+    // boundary) so the output is the form humans and external tools
+    // expect. The canonical form is still what gets passed to
+    // `os::exec::run` below — `CreateProcessW` prefers it.
     if std::env::var_os("GIT_SHIM_PRINT_RESOLVED").is_some_and(|v| !v.is_empty()) {
-        println!("{}", git.display());
+        println!("{}", resolver::display_path(&git).display());
         return Ok(0);
     }
 

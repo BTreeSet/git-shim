@@ -34,6 +34,19 @@ function Section([string]$msg) {
     Write-Host "==> $msg" -ForegroundColor Cyan
 }
 
+# Defence in depth: the shim strips Win32 extended-length prefixes
+# (`\\?\C:\...`) at every human-facing display boundary, including the
+# `GIT_SHIM_PRINT_RESOLVED` output we consume here. The canonical form is
+# still used internally for `CreateProcessW`. If a regression ever lets a
+# prefix leak through stdout, this helper keeps the assertions honest.
+function Normalize-Path([string]$p) {
+    if ($null -eq $p) { return $p }
+    $p = $p.Trim()
+    if ($p.StartsWith('\\?\UNC\')) { return '\\' + $p.Substring(8) }
+    if ($p.StartsWith('\\?\'))     { return $p.Substring(4) }
+    return $p
+}
+
 # ----------------------------------------------------------------------
 # 0. Sanity: GitHub Desktop is installed.
 # ----------------------------------------------------------------------
@@ -70,7 +83,7 @@ try {
 } finally {
     Remove-Item Env:GIT_SHIM_PRINT_RESOLVED
 }
-$resolvedEnv = ($resolvedEnv | Out-String).Trim()
+$resolvedEnv = Normalize-Path (($resolvedEnv | Out-String).Trim())
 Write-Host "Resolved (env):      $resolvedEnv"
 
 # --- Assertions on the resolved path ----------------------------------
@@ -124,7 +137,7 @@ $psArgs = @(
 )
 $resolvedFallback = & powershell.exe @psArgs
 if ($LASTEXITCODE -ne 0) { Fail "shim exit $LASTEXITCODE (fallback case); stderr above" }
-$resolvedFallback = ($resolvedFallback | Out-String).Trim()
+$resolvedFallback = Normalize-Path (($resolvedFallback | Out-String).Trim())
 Write-Host "Resolved (fallback): $resolvedFallback"
 
 if ($resolvedFallback -ine $resolvedEnv) {

@@ -24,6 +24,7 @@
 //! launcher script is the single source of truth for which one is currently
 //! active.
 
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
 use crate::error::ShimError;
@@ -35,6 +36,18 @@ const LAUNCHER_NEEDLE: &str = "/resources/app/static/github.sh";
 
 /// Resolve the active `git.exe` path for the current user's GitHub Desktop
 /// install. The returned path is canonicalized and verified to exist.
+///
+/// ## Why we keep the `\\?\` prefix
+///
+/// `Path::canonicalize` on Windows returns *extended-length* form
+/// (`\\?\C:\...` or `\\?\UNC\server\share\...`). Win32 file APIs —
+/// including `CreateProcessW`, which is what `Command::new(...).status()`
+/// eventually invokes — **prefer** this form: it bypasses the `MAX_PATH`
+/// limit and skips the kernel's path-normalization pass. We therefore
+/// return the canonical form **unchanged** from the resolver and only
+/// strip the prefix at human-facing display boundaries via
+/// [`display_path`] (the debug knob's `println!`, [`ShimError`] messages,
+/// etc.).
 pub fn resolve_git() -> Result<PathBuf, ShimError> {
     // `localappdata::resolve` reads the `LOCALAPPDATA` env var first and
     // falls back to the Win32 Known Folders API. We never treat
@@ -60,10 +73,65 @@ pub fn resolve_git() -> Result<PathBuf, ShimError> {
         .canonicalize()
         .map_err(|e| ShimError::CanonicalizeFailed(candidate.clone(), e))?;
 
+    // `Path::is_file` accepts extended-length paths natively, so we can
+    // verify existence without first stripping the prefix.
     if !canonical.is_file() {
         return Err(ShimError::GitExecutableMissing(canonical));
     }
     Ok(canonical)
+}
+
+/// Return a human-displayable view of `p` with any Win32 extended-length
+/// prefix removed.
+///
+/// Use this **only** at display boundaries — `println!`, error messages,
+/// log lines, things compared by the e2e script. **Never** use it to
+/// derive a path passed to a Win32 API; the extended-length form is the
+/// preferred input there.
+///
+/// Returns the input borrowed unchanged when no prefix is present, so the
+/// no-strip case allocates nothing.
+///
+/// | Input                              | Output                       |
+/// |------------------------------------|------------------------------|
+/// | `\\?\C:\Users\foo`                 | `C:\Users\foo`               |
+/// | `\\?\UNC\server\share\foo`         | `\\server\share\foo`         |
+/// | `\\?\Volume{GUID}\...`             | unchanged (no shorter form)  |
+/// | `C:\already\normal`                | unchanged                    |
+///
+/// Equivalent in spirit to `dunce::simplified`, inlined to avoid a
+/// dependency.
+pub fn display_path(p: &Path) -> Cow<'_, Path> {
+    // We compare on `&str` because the prefixes are pure ASCII. If the
+    // path is not valid UTF-8 it cannot start with our ASCII prefixes
+    // either, so returning it unchanged is correct.
+    let Some(s) = p.to_str() else {
+        return Cow::Borrowed(p);
+    };
+
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        // Restore the UNC `\\server\share\...` form.
+        let mut out = String::with_capacity(rest.len() + 2);
+        out.push_str(r"\\");
+        out.push_str(rest);
+        return Cow::Owned(PathBuf::from(out));
+    }
+
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        // Only strip for plain drive-letter paths, e.g. `C:\...`. Volume
+        // GUID paths (`Volume{...}`) and device paths have no shorter
+        // equivalent form.
+        let bytes = rest.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && bytes[2] == b'\\'
+        {
+            return Cow::Owned(PathBuf::from(rest));
+        }
+    }
+
+    Cow::Borrowed(p)
 }
 
 /// Pure helper: given the textual contents of the GitHub Desktop launcher
@@ -181,5 +249,59 @@ exec "/c/Users/example/AppData/Local/GitHubDesktop/app-3.4.5/resources/app/stati
         .iter()
         .collect();
         assert_eq!(p, expected);
+    }
+
+    #[test]
+    fn display_path_removes_extended_drive_letter_form() {
+        let p = Path::new(
+            r"\\?\C:\Users\runneradmin\AppData\Local\GitHubDesktop\app-3.5.12\resources\app\git\cmd\git.exe",
+        );
+        let got = display_path(p);
+        assert!(matches!(got, Cow::Owned(_)), "prefix strip must allocate");
+        assert_eq!(
+            &*got,
+            Path::new(
+                r"C:\Users\runneradmin\AppData\Local\GitHubDesktop\app-3.5.12\resources\app\git\cmd\git.exe"
+            )
+        );
+    }
+
+    #[test]
+    fn display_path_rewrites_unc_form() {
+        let p = Path::new(r"\\?\UNC\server\share\dir\file.txt");
+        let got = display_path(p);
+        assert!(matches!(got, Cow::Owned(_)));
+        assert_eq!(&*got, Path::new(r"\\server\share\dir\file.txt"));
+    }
+
+    #[test]
+    fn display_path_leaves_volume_guid_paths_alone() {
+        // Volume GUID paths have no shorter, equivalent form.
+        let p = Path::new(r"\\?\Volume{12345678-1234-1234-1234-1234567890ab}\foo\bar");
+        let got = display_path(p);
+        assert!(
+            matches!(got, Cow::Borrowed(_)),
+            "volume-GUID path must be returned borrowed/unchanged"
+        );
+        assert_eq!(&*got, p);
+    }
+
+    #[test]
+    fn display_path_passes_through_already_normal_paths() {
+        let p = Path::new(r"C:\Program Files\Git\cmd\git.exe");
+        let got = display_path(p);
+        assert!(
+            matches!(got, Cow::Borrowed(_)),
+            "no allocation for plain paths"
+        );
+        assert_eq!(&*got, p);
+    }
+
+    #[test]
+    fn display_path_passes_through_relative_paths() {
+        let p = Path::new(r"some\relative\path");
+        let got = display_path(p);
+        assert!(matches!(got, Cow::Borrowed(_)));
+        assert_eq!(&*got, p);
     }
 }

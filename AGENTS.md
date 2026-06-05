@@ -43,11 +43,23 @@ Correctness, exit-code fidelity, and Windows behavior are non-negotiable.
    `stderr` and bubble up the child's exact exit code via spawn-and-wait
    plus `status.code()`. Never pipe streams. Never remap exit codes
    beyond the documented `clamp_exit` truncation.
-7. **OS segregation.** All platform-specific behavior lives in `src/os/`.
+7. **Canonical paths internally, stripped only for display.**
+   `Path::canonicalize` on Windows returns extended-length form
+   (`\\?\C:\...` or `\\?\UNC\server\share\...`). That is the **preferred**
+   input shape for `CreateProcessW` and other Win32 file APIs (it bypasses
+   `MAX_PATH` and skips kernel re-normalization), so the resolver returns
+   it **unchanged** and the exec layer passes it straight through.
+   The prefix is stripped **only at human-display boundaries** via
+   `resolver::display_path`: the `GIT_SHIM_PRINT_RESOLVED` debug print,
+   every path embedded in a `ShimError::Display` message, and any future
+   log line. Do not pre-strip in the resolver. Do not skip stripping at
+   the display sites. Volume-GUID paths (`\\?\Volume{...}`) have no
+   shorter form and are passed through unchanged by `display_path`.
+8. **OS segregation.** All platform-specific behavior lives in `src/os/`.
    Even though there is currently only one supported OS, any new
    platform-specific imports (e.g. `std::os::windows::...`) belong there,
    not scattered through `lib.rs` or `resolver.rs`.
-8. **Debug interface.** The shim recognizes exactly one out-of-band
+9. **Debug interface.** The shim recognizes exactly one out-of-band
    environment variable: `GIT_SHIM_PRINT_RESOLVED`. When set to a
    non-empty value, the shim resolves the GitHub Desktop `git.exe`,
    prints its absolute path to stdout, and exits `0` **without invoking
