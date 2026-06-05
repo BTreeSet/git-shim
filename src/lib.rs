@@ -8,6 +8,18 @@
 //! Windows distribution inside `%LOCALAPPDATA%\GitHubDesktop\app-<version>\`
 //! that has no analogue on macOS or Linux. The crate therefore refuses to
 //! compile on any other target.
+//!
+//! ## Debug knob: `GIT_SHIM_PRINT_RESOLVED`
+//!
+//! When the environment variable `GIT_SHIM_PRINT_RESOLVED` is set to any
+//! non-empty value, the shim resolves the GitHub Desktop `git.exe` path,
+//! prints it to standard output, and exits with status `0` **without
+//! invoking git**. This intentionally deviates from real git CLI behavior
+//! and exists purely so the e2e CI job can verify the shim picks GitHub
+//! Desktop's bundled git rather than any system git on `%PATH%`.
+//!
+//! A name prefixed with `GIT_SHIM_` cannot collide with any real git
+//! environment variable (git uses `GIT_*`, `GIT_CONFIG_*`, etc.).
 
 #[cfg(not(windows))]
 compile_error!(
@@ -47,6 +59,15 @@ fn run() -> Result<i32, ShimError> {
     let _argv0 = std::env::args_os().next().ok_or(ShimError::MissingArgv0)?;
 
     let git = resolver::resolve_git()?;
+
+    // Debug knob (see crate-level docs): print the resolved git.exe and
+    // exit before spawning. Used by the e2e CI job to verify the resolver
+    // points at GitHub Desktop's bundled git, not the runner's system git.
+    if std::env::var_os("GIT_SHIM_PRINT_RESOLVED").is_some_and(|v| !v.is_empty()) {
+        println!("{}", git.display());
+        return Ok(0);
+    }
+
     let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
     os::exec::run(&git, &args).map_err(ShimError::Spawn)
 }

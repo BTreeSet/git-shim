@@ -47,6 +47,15 @@ Correctness, exit-code fidelity, and Windows behavior are non-negotiable.
    Even though there is currently only one supported OS, any new
    platform-specific imports (e.g. `std::os::windows::...`) belong there,
    not scattered through `lib.rs` or `resolver.rs`.
+8. **Debug interface.** The shim recognizes exactly one out-of-band
+   environment variable: `GIT_SHIM_PRINT_RESOLVED`. When set to a
+   non-empty value, the shim resolves the GitHub Desktop `git.exe`,
+   prints its absolute path to stdout, and exits `0` **without invoking
+   git**. This variable exists for the e2e CI job
+   (`scripts/e2e.ps1` invoked from `.github/workflows/ci.yml`) and must
+   not be removed, renamed, or repurposed. Do not add additional
+   `GIT_SHIM_*` knobs without strong justification — every knob is an
+   exception to "behave exactly like git".
 
 ## 3. Rust Engineering Standards
 

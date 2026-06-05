@@ -71,6 +71,22 @@ user on any machine.
    git --version
    ```
 
+## Debugging which `git.exe` got picked
+
+If you need to confirm the shim is pointing at GitHub Desktop's bundled
+git (and not, say, a `git.exe` left over on `%PATH%`), set
+`GIT_SHIM_PRINT_RESOLVED=1`. The shim will print the resolved absolute
+path to stdout and exit `0` without invoking git:
+
+```powershell
+$env:GIT_SHIM_PRINT_RESOLVED = '1'
+git-shim.exe                     # prints e.g. C:\Users\you\AppData\Local\GitHubDesktop\app-3.5.12\resources\app\git\cmd\git.exe
+Remove-Item Env:GIT_SHIM_PRINT_RESOLVED
+```
+
+This is the same hook the e2e CI job uses to verify resolution on every
+push.
+
 ## Architectural Invariants
 
 - Windows-only at the type-system level (`#[cfg(not(windows))] compile_error!`).

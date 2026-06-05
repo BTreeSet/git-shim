@@ -59,3 +59,50 @@ jobs:
           key: test-windows
       - name: cargo test
         run: cargo test --all-targets --target x86_64-pc-windows-msvc --no-fail-fast
+
+  e2e:
+    name: E2E (real GitHub Desktop install)
+    runs-on: windows-latest
+    needs: [lint, test]
+    env:
+      GHD_INSTALL_VERSION: '3.5.12'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: e2e-windows
+
+      # Cache the installer (~150 MB) keyed by pinned version so we don't
+      # redownload it on every run.
+      - name: Cache GitHub Desktop installer
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/GitHubDesktopSetup-x64-${{ env.GHD_INSTALL_VERSION }}.exe
+          key: ghd-installer-${{ env.GHD_INSTALL_VERSION }}
+
+      - name: Install GitHub Desktop ${{ env.GHD_INSTALL_VERSION }}
+        shell: pwsh
+        run: ./scripts/install-github-desktop.ps1 -Version $env:GHD_INSTALL_VERSION
+
+      - name: Show system git for contrast
+        shell: pwsh
+        run: |
+          $sys = Get-Command git.exe -ErrorAction SilentlyContinue
+          if ($sys) {
+            Write-Host "System git on PATH: $($sys.Source)"
+            & $sys.Source --version
+          } else {
+            Write-Host "No system git on PATH"
+          }
+
+      - name: Run e2e verification
+        shell: pwsh
+        run: |
+          ./scripts/e2e.ps1 `
+            -Target x86_64-pc-windows-msvc `
+            -ExpectedGhdVersion $env:GHD_INSTALL_VERSION
