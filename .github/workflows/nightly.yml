@@ -12,8 +12,12 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: write
+# Deny-by-default at the workflow level. Only the `publish` job below
+# re-elevates to `contents: write`; every other job runs with read-only
+# (or no) repo access. This ensures the version/gate/build jobs — which
+# execute third-party cargo code via build scripts and proc-macros —
+# never have a token capable of mutating the repository or releases.
+permissions: {}
 
 concurrency:
   group: nightly-${{ github.ref }}
@@ -23,11 +27,15 @@ jobs:
   version:
     name: Compute version
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       version: ${{ steps.v.outputs.version }}
       tag: ${{ steps.v.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - id: v
         shell: bash
         run: |
@@ -47,8 +55,12 @@ jobs:
     name: Pre-release quality gate
     needs: version
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -62,6 +74,12 @@ jobs:
     name: Build ${{ matrix.target }}
     needs: [version, gate]
     runs-on: windows-latest
+    # Build jobs compile third-party cargo dependencies (build scripts,
+    # proc-macros). They get strictly read-only repo access and the
+    # checkout credentials are scrubbed, so even a malicious dependency
+    # cannot exfiltrate a token capable of mutating the repository.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -70,6 +88,8 @@ jobs:
           - aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -121,8 +141,14 @@ jobs:
     name: Publish pre-release
     needs: [version, build]
     runs-on: ubuntu-latest
+    # The ONLY job in this workflow with `contents: write`. It does not
+    # check out the source tree (no `actions/checkout`), so there is no
+    # cargo, no build scripts, no third-party code path that could see
+    # the elevated token. It only downloads the pre-built artifacts and
+    # invokes the official GitHub release action.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: dist

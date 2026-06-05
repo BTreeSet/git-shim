@@ -5,8 +5,11 @@ on:
     branches: [main]
   pull_request:
 
-permissions:
-  contents: read
+# Top-level: deny-by-default. Every job below re-declares the exact
+# scopes it needs. This zeroes out every implicit scope (most
+# importantly `packages: write`, which older repos default to granting)
+# regardless of repo-level Actions settings.
+permissions: {}
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -23,8 +26,15 @@ jobs:
   lint:
     name: Lint (windows-latest)
     runs-on: windows-latest
+    # Read-only access to the repo source. No write scopes whatsoever.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Don't leave the GITHUB_TOKEN in `.git/config` after checkout;
+          # nothing in this job pushes.
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -36,8 +46,12 @@ jobs:
   msrv:
     name: MSRV (1.85)
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@1.85.0
         with:
           targets: x86_64-pc-windows-msvc
@@ -49,8 +63,12 @@ jobs:
   test:
     name: Test (windows-latest)
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -64,10 +82,25 @@ jobs:
     name: E2E (real GitHub Desktop install)
     runs-on: windows-latest
     needs: [lint, test]
+    # This job executes an *external* installer (GitHub Desktop) under
+    # the runner account. Even though the installer is downloaded from
+    # the upstream vendor over HTTPS, defense-in-depth dictates that:
+    #   1. No write scopes are granted (`contents: read` only).
+    #   2. The checkout step is told not to persist the token into
+    #      `.git/config` (`persist-credentials: false`), so a compromised
+    #      installer cannot pivot from the checkout cwd to a token grab.
+    #   3. `GITHUB_TOKEN` is never explicitly placed into any step's
+    #      `env:` block in this job. The only way a child process could
+    #      see it is via the credentials helper, which (1) and (2)
+    #      together neutralize.
+    permissions:
+      contents: read
     env:
       GHD_INSTALL_VERSION: '3.5.12'
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@stable
         with:

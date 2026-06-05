@@ -7,13 +7,20 @@ on:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
+# Deny-by-default; only the dedicated `publish` job re-elevates to
+# `contents: write`. The `build` jobs run third-party cargo dependencies
+# (proc-macros, build scripts) and must never see a write-capable token.
+permissions: {}
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: windows-latest
+    # Read-only access to the repo. Cargo build runs here, so any
+    # malicious dependency code only ever sees a token that cannot
+    # mutate the repository or releases.
+    permissions:
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -22,6 +29,10 @@ jobs:
           - aarch64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Strip the token from `.git/config` after checkout so
+          # downstream build scripts cannot grab credentials from disk.
+          persist-credentials: false
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
@@ -50,7 +61,33 @@ jobs:
           powershell -NoProfile -Command "Compress-Archive -Path '${name}' -DestinationPath '${name}.zip'"
           echo "asset=dist/${name}.zip" >> "$GITHUB_OUTPUT"
 
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-shim-${{ matrix.target }}
+          path: ${{ steps.pkg.outputs.asset }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [build]
+    runs-on: ubuntu-latest
+    # The ONLY job with `contents: write`. It does not check out the
+    # source tree, does not run cargo, and only downloads the
+    # already-built artifacts before invoking the official release
+    # action. No third-party code path ever touches the elevated token.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ steps.pkg.outputs.asset }}
+          files: dist/*

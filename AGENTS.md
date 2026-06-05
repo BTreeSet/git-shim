@@ -140,7 +140,40 @@ check that runs without compiling. Rely on CI for the rest.
   `git-shim` nomenclature. Only Windows targets are built.
 - Do not hand-edit GitHub Releases. Re-run the workflow instead.
 
-## 8. When in Doubt
+## 8. CI Privilege Discipline (least privilege, structurally enforced)
+
+Every workflow under `.github/workflows/` MUST follow these rules:
+
+1. **Deny-by-default at the workflow level.** The top of every workflow
+   declares `permissions: {}`. This zeroes out every implicit scope —
+   most importantly `packages: write`, which older repository defaults
+   grant — regardless of repository-level Actions settings.
+2. **Per-job re-elevation, minimum scope.** Each job declares its own
+   `permissions:` block listing only the scopes it actually uses. Read
+   jobs get `contents: read`; the single release-upload job gets
+   `contents: write`. No job ever needs `packages: *` — we publish to
+   GitHub Releases, not the package registry.
+3. **No write tokens in jobs that compile or run third-party code.**
+   The `build`, `gate`, `test`, `lint`, and `msrv` jobs all execute
+   third-party cargo dependencies (build scripts, proc-macros). They
+   are restricted to `contents: read` and use
+   `actions/checkout` with `persist-credentials: false` so the token
+   is not left in `.git/config` for a downstream process to harvest.
+4. **The `e2e` job is the most sensitive surface.** It downloads and
+   executes an *external* installer (GitHub Desktop). It MUST keep
+   `permissions: contents: read` and `persist-credentials: false`, and
+   MUST NOT receive `GITHUB_TOKEN` via any explicit `env:` block.
+5. **Publish jobs are dedicated and minimal.** The job with
+   `contents: write` does not check out the source tree, does not run
+   cargo, and only downloads pre-built artifacts before invoking the
+   release action. This structurally prevents any third-party code
+   path from observing the elevated token.
+6. **No new permission scopes without justification.** Adding
+   `id-token`, `packages`, `pages`, `pull-requests`, etc. to any job
+   requires a PR description explaining the exact API call that needs
+   it. The default answer is "no".
+
+## 9. When in Doubt
 
 Prefer the boring, explicit solution. Prefer fewer abstractions. Prefer
 deleting code over adding code. If a change feels clever, it probably
