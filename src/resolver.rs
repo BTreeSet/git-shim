@@ -55,23 +55,32 @@ pub fn resolve_git() -> Result<PathBuf, ShimError> {
     // Rust/Win32 path concept.
     let local_app_data = localappdata::resolve()?;
 
-    let install_root = PathBuf::from(&local_app_data).join("GitHubDesktop");
+    let install_root = local_app_data.join("GitHubDesktop");
     let launcher = install_root.join("bin").join("github");
 
     if !launcher.is_file() {
         return Err(ShimError::LauncherMissing(launcher));
     }
 
-    let contents = std::fs::read_to_string(&launcher)
-        .map_err(|e| ShimError::LauncherRead(launcher.clone(), e))?;
+    // Error paths consume `launcher` by value via `match`; the success
+    // path keeps it borrowed. This avoids cloning the PathBuf in the hot
+    // (success) path.
+    let contents = match std::fs::read_to_string(&launcher) {
+        Ok(c) => c,
+        Err(e) => return Err(ShimError::LauncherRead(launcher, e)),
+    };
 
-    let app_version = parse_app_version(&contents)
-        .ok_or_else(|| ShimError::VersionTokenMissing(launcher.clone()))?;
+    let app_version = match parse_app_version(&contents) {
+        Some(v) => v,
+        None => return Err(ShimError::VersionTokenMissing(launcher)),
+    };
 
     let candidate = git_path_for(&install_root, app_version);
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|e| ShimError::CanonicalizeFailed(candidate.clone(), e))?;
+    // Same pattern: move `candidate` into the error variant on failure.
+    let canonical = match candidate.canonicalize() {
+        Ok(c) => c,
+        Err(e) => return Err(ShimError::CanonicalizeFailed(candidate, e)),
+    };
 
     // `Path::is_file` accepts extended-length paths natively, so we can
     // verify existence without first stripping the prefix.

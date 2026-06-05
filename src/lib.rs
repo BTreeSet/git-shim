@@ -73,8 +73,10 @@ fn run() -> Result<i32, ShimError> {
         return Ok(0);
     }
 
-    let args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
-    os::exec::run(&git, &args).map_err(ShimError::Spawn)
+    // Hand the args iterator directly to `os::exec::run`; no intermediate
+    // `Vec<OsString>` allocation. `Command::args` consumes the iterator
+    // lazily, copying each `OsStr` straight into the child command line.
+    os::exec::run(&git, std::env::args_os().skip(1)).map_err(ShimError::Spawn)
 }
 
 /// Clamp a signed exit code to the unsigned byte that `ExitCode` accepts.
